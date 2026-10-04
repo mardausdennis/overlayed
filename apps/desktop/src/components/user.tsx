@@ -1,10 +1,10 @@
-import type { DirectionLR, OpacityTarget } from "@/config";
+import type { DirectionLR, OpacityTarget, RowStyle } from "@/config";
 import { useConfigValue } from "@/hooks/use-config-value";
 import type { OverlayedUser } from "../types";
 import { HeadphonesOff } from "./icons/headphones-off";
 import { MicOff } from "./icons/mic-off";
 import { cn } from "@/utils/tw";
-import { useLayoutEffect, useRef, useState } from "react";
+import { type CSSProperties, useLayoutEffect, useRef, useState } from "react";
 
 export const User = ({
   item,
@@ -13,6 +13,8 @@ export const User = ({
   opacityTarget,
   userScale,
   anchored,
+  rowStyle,
+  namesOnlyWhileSpeaking,
 }: {
   item: OverlayedUser;
   alignDirection: DirectionLR;
@@ -20,6 +22,8 @@ export const User = ({
   opacityTarget: OpacityTarget;
   userScale: number;
   anchored: boolean;
+  rowStyle: RowStyle;
+  namesOnlyWhileSpeaking: boolean;
 }) => {
   const { id, selfMuted, selfDeafened, talking, muted, deafened, avatarHash } = item;
 
@@ -28,6 +32,11 @@ export const User = ({
   const talkingClass = talking ? "border-green-500" : "border-zinc-800";
   const mutedClass = selfMuted || muted ? "text-zinc-400" : "";
   const opacityStyle = talking ? "100%" : `${opacity}%`;
+  const pill = rowStyle === "pill" && alignDirection !== "center";
+  const namesHidden = namesOnlyWhileSpeaking && !talking;
+  const pillBackground = namesHidden
+    ? "transparent"
+    : `rgba(0, 0, 0, ${0.55 * (opacityTarget === "username-box" ? opacity / 100 : 1)})`;
   const scaleFactor = (userScale ?? 100) / 100;
   const rowRef = useRef<HTMLDivElement>(null);
   const [naturalSize, setNaturalSize] = useState<{ width: number; height: number } | null>(null);
@@ -43,7 +52,8 @@ export const User = ({
       );
     };
     const observer = new ResizeObserver(measure);
-    observer.observe(row);
+    // Styles can change only padding while the content box stays the same.
+    observer.observe(row, { box: "border-box" });
     measure();
     return () => observer.disconnect();
   }, [anchored]);
@@ -88,7 +98,7 @@ export const User = ({
         className={cn(
           "absolute left-3 -bottom-2 pr-1 py-0.5 min-w-6 h-6 rounded-full",
           anyState ? "bg-black/80" : "bg-transparent",
-          alignDirection === "center" ? "flex" : anchored ? "hidden" : "md:hidden"
+          alignDirection === "center" || namesHidden ? "flex" : anchored ? "hidden" : "md:hidden"
         )}
       >
         {icon}
@@ -104,9 +114,17 @@ export const User = ({
         "flex gap-2 py-1 p-2 justify-start items-center transition-opacity",
         alignDirection == "right" ? "flex-row-reverse" : "flex-row",
         anchored ? "w-max shrink-0" : undefined,
-        anchored && alignDirection === "center" ? "pb-2" : undefined
+        anchored && alignDirection === "center" ? "pb-2" : undefined,
+        pill && "rounded-full px-1.5 py-1",
+        pill && !anchored && "w-fit max-w-full md:bg-(--row-background)",
+        pill && !anchored && alignDirection === "right" && "ml-auto",
+        // Reserve the badge overhang even while speaking, so talking never
+        // changes the measured row height or clips a hidden-name mute badge.
+        namesOnlyWhileSpeaking && alignDirection !== "center" && "pb-2"
       )}
       style={{
+        ...(pill ? ({ "--row-background": pillBackground } as CSSProperties) : {}),
+        ...(pill && anchored ? { backgroundColor: pillBackground } : {}),
         ...(opacityTarget === "all" ? { opacity: opacityStyle } : {}),
         transform: scaleFactor !== 1 ? `scale(${scaleFactor})` : undefined,
         transformOrigin: scaleFactor !== 1 ? (anchored ? "top left" : transformOrigin) : undefined,
@@ -137,9 +155,15 @@ export const User = ({
             ? "flex shrink-0 pointer-events-none items-center rounded-md p-1 pl-2 pr-2"
             : "max-w-[calc(100%-50px)] md:flex hidden pointer-events-none items-center rounded-md p-1 pl-2 pr-2",
           mutedClass,
-          alignDirection === "center" ? "hidden md:hidden" : undefined
+          alignDirection === "center" ? "hidden md:hidden" : undefined,
+          pill && "text-white font-semibold",
+          namesHidden && "invisible"
         )}
-        style={{ backgroundColor: `rgba(40, 40, 40, ${opacityTarget === "username-box" ? opacity / 100 : 1})` }}
+        style={{
+          backgroundColor: pill
+            ? "transparent"
+            : `rgba(40, 40, 40, ${opacityTarget === "username-box" ? opacity / 100 : 1})`,
+        }}
       >
         <span className="truncate text-ellipsis">{displayName}</span>
         <div className="flex">

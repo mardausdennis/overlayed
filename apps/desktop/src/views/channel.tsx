@@ -22,6 +22,8 @@ export const ChannelView = ({
   const { value: opacityTarget } = useConfigValue("opacityTarget");
   const { value: userScale } = useConfigValue("userScale");
   const { value: vertical } = useConfigValue("vertical");
+  const { value: rowStyle } = useConfigValue("rowStyle");
+  const { value: namesOnlyWhileSpeaking } = useConfigValue("namesOnlyWhileSpeaking");
 
   const allUsers = Object.entries(users);
   let userList = showOnlyTalkingUsers ? allUsers.filter(([, item]) => item.talking) : allUsers;
@@ -43,6 +45,8 @@ export const ChannelView = ({
       opacityTarget={opacityTarget}
       userScale={userScale}
       anchored={anchored}
+      rowStyle={rowStyle}
+      namesOnlyWhileSpeaking={namesOnlyWhileSpeaking}
     />
   ));
 
@@ -82,11 +86,17 @@ export const ChannelView = ({
       >
         {displayOnly && channelName && (
           <div
-            className="mx-2 mb-1 max-w-[280px] truncate rounded-md px-2 py-1 text-xs font-semibold text-white"
+            className={cn(
+              "mx-2 mb-1 max-w-[280px] truncate rounded-md px-2 py-1 text-xs font-semibold text-white",
+              rowStyle === "pill" && "rounded-full"
+            )}
             title={channelName}
             style={{
               opacity: opacityTarget === "all" ? opacity / 100 : 1,
-              backgroundColor: `rgba(40, 40, 40, ${opacityTarget === "username-box" ? opacity / 100 : 1})`,
+              backgroundColor:
+                rowStyle === "pill"
+                  ? `rgba(0, 0, 0, ${0.55 * (opacityTarget === "username-box" ? opacity / 100 : 1)})`
+                  : `rgba(40, 40, 40, ${opacityTarget === "username-box" ? opacity / 100 : 1})`,
             }}
           >
             {channelName}
