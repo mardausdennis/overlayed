@@ -358,6 +358,8 @@ fn update_pin(app: &AppHandle, value: Option<bool>) -> Result<(), String> {
         Some(value) => commands::set_pin(window.clone(), pinned, menu, taskbar, value),
         None => commands::toggle_pin(window.clone(), pinned, menu, taskbar),
       }
+      #[cfg(not(target_os = "macos"))]
+      crate::tray::update_bundle_icon(&app_handle, commands::get_pin(app_handle.state::<Pinned>()));
       // Batch the existing pin path and hidden override on the UI thread, before
       // another mouse event can be dispatched. Do not change the logical pin state.
       if app_handle.state::<OverlayVisibility>().is_hidden() {
