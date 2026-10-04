@@ -20,6 +20,7 @@ import { cn } from "@/utils/tw";
 import { Metric, track } from "@/metrics";
 import { invoke } from "@tauri-apps/api/core";
 import { emit } from "@tauri-apps/api/event";
+import { useConfigValue } from "@/hooks/use-config-value";
 
 const mapping = {
   left: 0,
@@ -67,6 +68,7 @@ export const NavBar = ({
   const location = useLocation();
   const navigate = useNavigate();
   const { currentChannel, me } = useAppStore();
+  const { value: showChannelName } = useConfigValue("showChannelName");
 
   const [channelName, setChannelName] = useState<string>();
   const [currentAlignment, setCurrentAlignment] = useState(mapping[alignDirection]);
@@ -156,12 +158,14 @@ export const NavBar = ({
           />
 
           {channelName ? (
-            <div
-              data-tauri-drag-region={anchored ? undefined : true}
-              className={cn("hidden md:inline", anchored && "truncate")}
-            >
-              {channelName}
-            </div>
+            showChannelName && (
+              <div
+                data-tauri-drag-region={anchored ? undefined : true}
+                className={cn("hidden md:inline", anchored && "truncate")}
+              >
+                {channelName}
+              </div>
+            )
           ) : (
             <div data-tauri-drag-region={anchored ? undefined : true} className={anchored ? "truncate" : undefined}>
               Overlayed

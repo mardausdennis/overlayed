@@ -1,4 +1,4 @@
-import type { DirectionLR, OpacityTarget, RowStyle } from "@/config";
+import type { DirectionLR, OpacityTarget } from "@/config";
 import { useConfigValue } from "@/hooks/use-config-value";
 import type { OverlayedUser } from "../types";
 import { HeadphonesOff } from "./icons/headphones-off";
@@ -13,8 +13,6 @@ export const User = ({
   opacityTarget,
   userScale,
   anchored,
-  rowStyle,
-  namesOnlyWhileSpeaking,
 }: {
   item: OverlayedUser;
   alignDirection: DirectionLR;
@@ -22,21 +20,15 @@ export const User = ({
   opacityTarget: OpacityTarget;
   userScale: number;
   anchored: boolean;
-  rowStyle: RowStyle;
-  namesOnlyWhileSpeaking: boolean;
 }) => {
   const { id, selfMuted, selfDeafened, talking, muted, deafened, avatarHash } = item;
 
   const avatarUrl = avatarHash ? `https://cdn.discordapp.com/avatars/${id}/${avatarHash}.jpg` : "/img/default.png";
 
   const talkingClass = talking ? "border-green-500" : "border-zinc-800";
-  const mutedClass = selfMuted || muted ? "text-zinc-400" : "";
   const opacityStyle = talking ? "100%" : `${opacity}%`;
-  const pill = rowStyle === "pill" && alignDirection !== "center";
-  const namesHidden = namesOnlyWhileSpeaking && !talking;
-  const pillBackground = namesHidden
-    ? "transparent"
-    : `rgba(0, 0, 0, ${0.55 * (opacityTarget === "username-box" ? opacity / 100 : 1)})`;
+  const pill = alignDirection !== "center";
+  const pillBackground = `rgba(0, 0, 0, ${0.55 * (opacityTarget === "username-box" ? opacity / 100 : 1)})`;
   const scaleFactor = (userScale ?? 100) / 100;
   const rowRef = useRef<HTMLDivElement>(null);
   const [naturalSize, setNaturalSize] = useState<{ width: number; height: number } | null>(null);
@@ -98,7 +90,7 @@ export const User = ({
         className={cn(
           "absolute left-3 -bottom-2 pr-1 py-0.5 min-w-6 h-6 rounded-full",
           anyState ? "bg-black/80" : "bg-transparent",
-          alignDirection === "center" || namesHidden ? "flex" : anchored ? "hidden" : "md:hidden"
+          alignDirection === "center" ? "flex" : anchored ? "hidden" : "md:hidden"
         )}
       >
         {icon}
@@ -117,10 +109,7 @@ export const User = ({
         anchored && alignDirection === "center" ? "pb-2" : undefined,
         pill && "rounded-full px-1.5 py-1",
         pill && !anchored && "w-fit max-w-full md:bg-(--row-background)",
-        pill && !anchored && alignDirection === "right" && "ml-auto",
-        // Reserve the badge overhang even while speaking, so talking never
-        // changes the measured row height or clips a hidden-name mute badge.
-        namesOnlyWhileSpeaking && alignDirection !== "center" && "pb-2"
+        pill && !anchored && alignDirection === "right" && "ml-auto"
       )}
       style={{
         ...(pill ? ({ "--row-background": pillBackground } as CSSProperties) : {}),
@@ -131,7 +120,7 @@ export const User = ({
         willChange: scaleFactor !== 1 ? "transform" : undefined,
       }}
     >
-      <div className={`pointer-events-none relative rounded-full border-2 ${talkingClass}`}>
+      <div className={`pointer-events-none shrink-0 relative rounded-full border-2 ${talkingClass}`}>
         <img
           onError={e => {
             // @ts-expect-error need to fix this prolly
@@ -153,20 +142,13 @@ export const User = ({
         className={cn(
           anchored
             ? "flex shrink-0 pointer-events-none items-center rounded-md p-1 pl-2 pr-2"
-            : "max-w-[calc(100%-50px)] md:flex hidden pointer-events-none items-center rounded-md p-1 pl-2 pr-2",
-          mutedClass,
+            : "min-w-0 md:flex hidden pointer-events-none items-center rounded-md p-1 pl-2 pr-2",
           alignDirection === "center" ? "hidden md:hidden" : undefined,
-          pill && "text-white font-semibold",
-          namesHidden && "invisible"
+          "text-white font-semibold"
         )}
-        style={{
-          backgroundColor: pill
-            ? "transparent"
-            : `rgba(40, 40, 40, ${opacityTarget === "username-box" ? opacity / 100 : 1})`,
-        }}
       >
         <span className="truncate text-ellipsis">{displayName}</span>
-        <div className="flex">
+        <div className="flex shrink-0">
           {(selfMuted || muted) && <MicOff className={muted ? "fill-red-600" : "fill-current"} />}
           {(selfDeafened || deafened) && <HeadphonesOff className={deafened ? "fill-red-600" : "fill-current"} />}
         </div>
