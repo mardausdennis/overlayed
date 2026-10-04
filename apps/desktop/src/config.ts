@@ -6,7 +6,6 @@ export type DirectionLR = "left" | "right" | "center";
 export type DirectionTB = "top" | "bottom";
 
 export type OpacityTarget = "all" | "username-box";
-export type RowStyle = "classic" | "pill";
 
 export type HotkeyCommand = "pin" | "toggle-visibility" | "next-monitor" | "open-settings";
 export interface HotkeyBinding {
@@ -49,8 +48,7 @@ export interface OverlayedConfig {
   placementOffsetY: number;
   startPinned: boolean;
   hotkeys: HotkeyBinding[];
-  rowStyle: RowStyle;
-  namesOnlyWhileSpeaking: boolean;
+  showChannelName: boolean;
   hideWhenFullscreen: boolean;
 }
 
@@ -80,8 +78,7 @@ export const DEFAULT_OVERLAYED_CONFIG: OverlayedConfig = {
     { key: "CommandOrControl+Shift+H", command: "pin" },
     { key: "CommandOrControl+Shift+G", command: "toggle-visibility" },
   ],
-  rowStyle: "classic",
-  namesOnlyWhileSpeaking: false,
+  showChannelName: true,
   hideWhenFullscreen: true,
 };
 
