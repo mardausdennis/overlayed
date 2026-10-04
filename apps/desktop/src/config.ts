@@ -52,6 +52,7 @@ export interface OverlayedConfig {
   hotkeys: HotkeyBinding[];
   rowStyle: RowStyle;
   namesOnlyWhileSpeaking: boolean;
+  hideWhenFullscreen: boolean;
 }
 
 export type OverlayedConfigKey = keyof OverlayedConfig;
@@ -82,6 +83,7 @@ export const DEFAULT_OVERLAYED_CONFIG: OverlayedConfig = {
   ],
   rowStyle: "classic",
   namesOnlyWhileSpeaking: false,
+  hideWhenFullscreen: true,
 };
 
 const CONFIG_FILE_NAME = "config.json";

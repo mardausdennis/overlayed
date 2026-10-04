@@ -101,6 +101,7 @@ impl Tray {
         // NOTE: we only save position and size so that StateFlags::FULLSCREEN is not saved, as
         // nspanels do not support it
         app.save_window_state(StateFlags::POSITION | StateFlags::SIZE);
+        crate::fullscreen::stop(app);
         std::process::exit(0)
       }
       _ => {}
