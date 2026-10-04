@@ -3,15 +3,21 @@ import { Switch } from "@/components/ui/switch";
 import Config, { type OverlayedConfig, type RowStyle } from "@/config";
 import { useConfigValue } from "@/hooks/use-config-value";
 import { emit } from "@tauri-apps/api/event";
+import { platform } from "@tauri-apps/plugin-os";
 import { useState } from "react";
 
 export const Appearance = () => {
   const { value: rowStyle } = useConfigValue("rowStyle");
   const { value: namesOnlyWhileSpeaking } = useConfigValue("namesOnlyWhileSpeaking");
+  const { value: hideWhenFullscreen } = useConfigValue("hideWhenFullscreen");
+  const windows = platform() === "windows";
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const update = async <K extends "rowStyle" | "namesOnlyWhileSpeaking">(key: K, value: OverlayedConfig[K]) => {
+  const update = async <K extends "rowStyle" | "namesOnlyWhileSpeaking" | "hideWhenFullscreen">(
+    key: K,
+    value: OverlayedConfig[K]
+  ) => {
     setSaving(true);
     try {
       await Config.set(key, value);
@@ -57,6 +63,18 @@ export const Appearance = () => {
           onCheckedChange={checked => update("namesOnlyWhileSpeaking", checked)}
         />
       </div>
+      <div className="flex items-center justify-between h-8 mx-2">
+        <label htmlFor="hide-when-fullscreen" className="font-medium">
+          Hide when a fullscreen app is in front
+        </label>
+        <Switch
+          id="hide-when-fullscreen"
+          checked={hideWhenFullscreen}
+          disabled={saving || !windows}
+          onCheckedChange={checked => update("hideWhenFullscreen", checked)}
+        />
+      </div>
+      {!windows && <p className="mx-2 text-xs text-zinc-400">Windows only for now.</p>}
       {error && (
         <p className="mx-2 text-xs text-red-400" role="alert">
           {error}

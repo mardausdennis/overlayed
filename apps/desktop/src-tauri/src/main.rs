@@ -10,6 +10,7 @@ extern crate objc;
 mod app_handle;
 mod commands;
 mod constants;
+mod fullscreen;
 mod hotkeys;
 mod placement;
 mod tray;
@@ -135,6 +136,7 @@ fn main() {
     .manage(placement::PlacementState::default())
     .manage(hotkeys::HotkeysState::default())
     .manage(hotkeys::OverlayVisibility::default())
+    .manage(fullscreen::FullscreenState::default())
     .setup(move |app| {
       debug!("starting app...");
       let window = app.get_webview_window(MAIN_WINDOW_NAME).unwrap();
@@ -177,6 +179,8 @@ fn main() {
         height: SETTINGS_WINDOW_HEIGHT,
       });
 
+      fullscreen::start(app.app_handle());
+
       Ok(())
     })
     .invoke_handler(generate_handler![
@@ -198,6 +202,10 @@ fn main() {
       hotkeys::suspend_hotkeys,
       hotkeys::record_hotkey,
       hotkeys::set_overlay_visible,
+      hotkeys::get_overlay_visibility,
+      hotkeys::acknowledge_overlay_visible,
+      fullscreen::get_fullscreen_state,
+      fullscreen::set_fullscreen_tracking,
     ]);
 
   app
@@ -205,6 +213,10 @@ fn main() {
     .expect("An error occured while running the app!")
     .run(|app, event| {
       use tauri::WindowEvent as WEvent;
+
+      if matches!(event, tauri::RunEvent::Exit) {
+        fullscreen::stop(app);
+      }
 
       if let tauri::RunEvent::WindowEvent {
         event: we, label, ..
@@ -220,6 +232,7 @@ fn main() {
             if label == MAIN_WINDOW_NAME {
               // Save state on close
               app.save_window_state(StateFlags::POSITION | StateFlags::SIZE);
+              fullscreen::stop(app);
               std::process::exit(0);
             } else {
               api.prevent_close();
@@ -227,11 +240,18 @@ fn main() {
           }
 
           WEvent::Resized(_) | WEvent::Moved(_) => {
+            if label == MAIN_WINDOW_NAME {
+              fullscreen::refresh(app);
+            }
             if label == MAIN_WINDOW_NAME && !app.state::<placement::PlacementState>().is_active() {
               // Also save state whenever the main window is moved or resized so
               // we persist the latest bounds even if the process is terminated
               app.save_window_state(StateFlags::POSITION | StateFlags::SIZE);
             }
+          }
+
+          WEvent::ScaleFactorChanged { .. } if label == MAIN_WINDOW_NAME => {
+            fullscreen::refresh(app)
           }
 
           _ => {}

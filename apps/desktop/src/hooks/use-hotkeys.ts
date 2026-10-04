@@ -18,6 +18,13 @@ export interface HotkeysStatus {
   suspended: boolean;
 }
 
+interface VisibilityStatus {
+  hotkeyHidden: boolean;
+  fullscreenHidden: boolean;
+  visible: boolean;
+  revision: number;
+}
+
 const mainWindow = getCurrentWebviewWindow().label === "main";
 
 export const useHotkeys = () => {
@@ -29,9 +36,23 @@ export const useHotkeys = () => {
     let bindingsKey: string | null = null;
     let registrations = Promise.resolve();
     let actions = Promise.resolve();
+    let tracking = Promise.resolve();
+    let trackingEnabled: boolean | null = null;
+    let visibility: VisibilityStatus | null = null;
 
     const receiveConfig = (value: OverlayedConfig) => {
       config = value;
+      if (trackingEnabled !== value.hideWhenFullscreen) {
+        trackingEnabled = value.hideWhenFullscreen;
+        tracking = tracking
+          .then(async () => {
+            if (!disposed) await invoke("set_fullscreen_tracking", { enabled: value.hideWhenFullscreen });
+          })
+          .catch(error => {
+            trackingEnabled = null;
+            console.warn("Could not update fullscreen tracking", error);
+          });
+      }
       const key = JSON.stringify(value.hotkeys);
       if (key === bindingsKey) return;
       bindingsKey = key;
@@ -45,18 +66,35 @@ export const useHotkeys = () => {
         });
     };
 
-    const setVisible = async (visible: boolean) => {
-      if (!visible) {
-        // Do not hide anything until the native window is click-through.
-        await invoke("set_overlay_visible", { visible: false });
+    const receiveVisibility = (value: VisibilityStatus) => {
+      if (!visibility || value.revision >= visibility.revision) {
+        visibility = value;
+        // A native hide can arrive while a previous show waits for two frames.
+        // Apply it immediately rather than leaving opacity visible in the queue.
+        if (!value.visible) useAppStore.getState().setAppVisible(false);
+      }
+    };
+
+    const reconcileVisibility = async () => {
+      if (!visibility) return;
+      const status = visibility;
+      if (!status.visible) {
+        // Native transitions are published only after enabling click-through.
         useAppStore.getState().setAppVisible(false);
       } else {
         // Paint first, then restore cursor handling from the current native pin.
-        // No show(), hide() or focus call: the foreground game stays active.
+        // No show(), hide() or focus call: the foreground app stays active.
         flushSync(() => useAppStore.getState().setAppVisible(true));
         await new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
-        await invoke("set_overlay_visible", { visible: true });
+        if (disposed) return;
+        receiveVisibility(await invoke<VisibilityStatus>("acknowledge_overlay_visible", { revision: status.revision }));
+        if (!visibility?.visible) useAppStore.getState().setAppVisible(false);
       }
+    };
+
+    const setVisible = async (visible: boolean) => {
+      receiveVisibility(await invoke<VisibilityStatus>("set_overlay_visible", { visible }));
+      await reconcileVisibility();
     };
 
     const nextMonitor = async () => {
@@ -91,10 +129,21 @@ export const useHotkeys = () => {
         receiveConfig(event.payload);
       }),
       listen<HotkeyCommand>("hotkey_action", event => {
-        if (event.payload === "toggle-visibility") enqueue(() => setVisible(!useAppStore.getState().visible));
+        if (event.payload === "toggle-visibility") {
+          enqueue(async () => {
+            if (!visibility) receiveVisibility(await invoke<VisibilityStatus>("get_overlay_visibility"));
+            // Toggle the user's reason, not effective visibility. Fullscreen
+            // leaving must never undo a separate hide-hotkey choice.
+            await setVisible(visibility?.hotkeyHidden ?? false);
+          });
+        }
         if (event.payload === "next-monitor") enqueue(nextMonitor);
       }),
       listen("show_overlay", () => enqueue(() => setVisible(true))),
+      listen<VisibilityStatus>("overlay_visibility", event => {
+        receiveVisibility(event.payload);
+        enqueue(reconcileVisibility);
+      }),
     ]);
     listeners
       .then(async unlisteners => {
@@ -102,11 +151,15 @@ export const useHotkeys = () => {
           unlisteners.forEach(unlisten => unlisten());
           return;
         }
-        // A webview reload resets the store; reconcile its visibility with the
-        // native override before registering new bindings.
-        enqueue(() => setVisible(useAppStore.getState().visible));
         const value = await Config.getConfig();
         if (!disposed && !configSeen) receiveConfig(value);
+        // Read after config push and after listening, closing the startup/reload
+        // gap without resetting either native hide reason.
+        await tracking;
+        if (!disposed) {
+          receiveVisibility(await invoke<VisibilityStatus>("get_overlay_visibility"));
+          enqueue(reconcileVisibility);
+        }
       })
       .catch(error => console.warn("Could not initialize overlay hotkeys", error));
 
