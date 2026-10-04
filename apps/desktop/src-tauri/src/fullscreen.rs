@@ -182,10 +182,37 @@ mod platform {
   }
 }
 
+#[cfg(any(target_os = "windows", test))]
+mod scheduling {
+  #[derive(Clone, Copy)]
+  pub enum Event {
+    Foreground,
+    Focus,
+    CaptureStart,
+    Timer,
+    Other,
+  }
+
+  pub type Rechecks = [Option<u64>; 3];
+
+  // Deadlines are relative to the hook thread's monotonic clock. Activation
+  // can complete after its event; newer activation replaces the whole sequence.
+  pub fn schedule(event: Event, now_ms: u64, pending: Rechecks) -> Rechecks {
+    match event {
+      Event::Foreground | Event::Focus | Event::CaptureStart => {
+        [150, 500, 1500].map(|delay| Some(now_ms.saturating_add(delay)))
+      }
+      Event::Timer => pending.map(|deadline| deadline.filter(|deadline| *deadline > now_ms)),
+      Event::Other => pending,
+    }
+  }
+}
+
 #[cfg(target_os = "windows")]
 mod platform {
   use super::decision::{self, Foreground, Rect};
-  use std::{cell::RefCell, mem::size_of, ptr::null_mut, sync::mpsc, thread};
+  use super::scheduling::{self, Event, Rechecks};
+  use std::{cell::RefCell, mem::size_of, ptr::null_mut, sync::mpsc, thread, time::Instant};
   use tauri::{AppHandle, Manager};
   use windows_sys::Win32::{
     Foundation::{HWND, RECT},
@@ -209,8 +236,84 @@ mod platform {
     app: AppHandle,
     overlay: usize,
     queued: bool,
+    clock: Instant,
+    rechecks: Rechecks,
+    timer: Option<usize>,
   }
   thread_local! { static CONTEXT: RefCell<Option<Context>> = const { RefCell::new(None) }; }
+
+  impl Context {
+    fn now_ms(&self) -> u64 {
+      self.clock.elapsed().as_millis().min(u128::from(u64::MAX)) as u64
+    }
+
+    fn queue_recheck(&mut self) {
+      if self.queued {
+        return;
+      }
+      // SAFETY: called only on the hook thread after its message queue exists.
+      if unsafe { PostThreadMessageW(GetCurrentThreadId(), RECHECK, 0, 0) } != 0 {
+        self.queued = true;
+      } else {
+        log::warn!(
+          "Could not schedule fullscreen check: {}",
+          std::io::Error::last_os_error()
+        );
+      }
+    }
+
+    fn cancel_timer(&mut self) {
+      if let Some(timer) = self.timer.take() {
+        // SAFETY: this thread owns the null-hwnd timer ID returned by SetTimer.
+        if unsafe { KillTimer(null_mut(), timer) } == 0 {
+          log::warn!(
+            "Could not remove fullscreen recheck timer: {}",
+            std::io::Error::last_os_error()
+          );
+        }
+      }
+    }
+
+    fn arm_timer(&mut self) {
+      self.cancel_timer();
+      let Some(deadline) = self.rechecks.iter().flatten().min().copied() else {
+        return;
+      };
+      let delay = deadline
+        .saturating_sub(self.now_ms())
+        .clamp(1, u64::from(u32::MAX)) as u32;
+      // SAFETY: thread timer, no callback; WM_TIMER is handled in our message loop.
+      let timer = unsafe { SetTimer(null_mut(), 0, delay, None) };
+      if timer == 0 {
+        log::warn!(
+          "Could not defer fullscreen check: {}",
+          std::io::Error::last_os_error()
+        );
+      } else {
+        self.timer = Some(timer);
+      }
+    }
+
+    fn timer_elapsed(&mut self, id: usize) {
+      if self.timer != Some(id) {
+        return;
+      }
+      let pending = scheduling::schedule(Event::Timer, self.now_ms(), self.rechecks);
+      // KillTimer does not remove queued messages. Checking the deadline also
+      // rejects an old message if Windows reused its timer ID after a restart.
+      if pending != self.rechecks {
+        self.rechecks = pending;
+        self.arm_timer();
+        self.queue_recheck();
+      }
+    }
+  }
+
+  impl Drop for Context {
+    fn drop(&mut self) {
+      self.cancel_timer();
+    }
+  }
 
   struct Hooks(Vec<HWINEVENTHOOK>);
   impl Drop for Hooks {
@@ -243,20 +346,25 @@ mod platform {
       let Some(context) = context.as_mut() else {
         return;
       };
-      // No names/content are read. Child/control location changes are ignored.
-      let relevant = event == EVENT_SYSTEM_FOREGROUND
+      let activation = match event {
+        EVENT_SYSTEM_FOREGROUND => Event::Foreground,
+        EVENT_OBJECT_FOCUS => Event::Focus,
+        EVENT_SYSTEM_CAPTURESTART => Event::CaptureStart,
+        _ => Event::Other,
+      };
+      let schedules_rechecks = !matches!(activation, Event::Other);
+      if schedules_rechecks {
+        context.rechecks = scheduling::schedule(activation, context.now_ms(), context.rechecks);
+        context.arm_timer();
+      }
+      // Focus can belong to a child control and foreground can still be the
+      // previous hwnd. Do not apply the geometry filter to activation events.
+      let relevant = schedules_rechecks
         || (object == OBJID_WINDOW
           && child == 0
           && (hwnd == GetForegroundWindow() || hwnd as usize == context.overlay));
-      if relevant && !context.queued {
-        if PostThreadMessageW(GetCurrentThreadId(), RECHECK, 0, 0) != 0 {
-          context.queued = true;
-        } else {
-          log::warn!(
-            "Could not schedule fullscreen check: {}",
-            std::io::Error::last_os_error()
-          );
-        }
+      if relevant {
+        context.queue_recheck();
       }
     });
   }
@@ -279,6 +387,8 @@ mod platform {
           let mut hooks = Hooks(Vec::new());
           for event in [
             EVENT_SYSTEM_FOREGROUND,
+            EVENT_OBJECT_FOCUS,
+            EVENT_SYSTEM_CAPTURESTART,
             EVENT_OBJECT_LOCATIONCHANGE,
             EVENT_SYSTEM_MOVESIZEEND,
             EVENT_SYSTEM_MINIMIZESTART,
@@ -309,6 +419,9 @@ mod platform {
               app,
               overlay,
               queued: false,
+              clock: Instant::now(),
+              rechecks: [None; 3],
+              timer: None,
             })
           });
           if send.send(Ok(GetCurrentThreadId())).is_err() {
@@ -333,6 +446,14 @@ mod platform {
                   super::refresh(&context.app);
                 }
               });
+            }
+            if message.message == WM_TIMER {
+              CONTEXT.with(|context| {
+                if let Some(context) = context.borrow_mut().as_mut() {
+                  context.timer_elapsed(message.wParam);
+                }
+              });
+              continue;
             }
             TranslateMessage(&message);
             DispatchMessageW(&message);
@@ -448,6 +569,52 @@ mod platform {
 #[cfg(test)]
 mod tests {
   use super::decision::*;
+  use super::scheduling::{schedule, Event};
+
+  #[test]
+  fn activation_events_schedule_three_bounded_rechecks() {
+    for event in [Event::Foreground, Event::Focus, Event::CaptureStart] {
+      assert_eq!(
+        schedule(event, 100, [None; 3]),
+        [Some(250), Some(600), Some(1600)]
+      );
+    }
+  }
+
+  #[test]
+  fn newer_activation_restarts_the_entire_sequence() {
+    let pending = schedule(Event::Foreground, 0, [None; 3]);
+    let pending = schedule(Event::Timer, 150, pending);
+    assert_eq!(pending, [None, Some(500), Some(1500)]);
+    for event in [Event::Foreground, Event::Focus, Event::CaptureStart] {
+      assert_eq!(
+        schedule(event, 300, pending),
+        [Some(450), Some(800), Some(1800)]
+      );
+    }
+  }
+
+  #[test]
+  fn timer_sequence_finishes_and_idle_never_schedules() {
+    let pending = schedule(Event::Foreground, 100, [None; 3]);
+    assert_eq!(schedule(Event::Timer, 249, pending), pending);
+    let pending = schedule(Event::Timer, 250, pending);
+    assert_eq!(pending, [None, Some(600), Some(1600)]);
+    let pending = schedule(Event::Timer, 600, pending);
+    assert_eq!(pending, [None, None, Some(1600)]);
+    let pending = schedule(Event::Timer, 1600, pending);
+    assert_eq!(pending, [None; 3]);
+    assert_eq!(schedule(Event::Timer, 10_000, pending), [None; 3]);
+    assert_eq!(schedule(Event::Other, 10_000, pending), [None; 3]);
+  }
+
+  #[test]
+  fn geometry_events_do_not_extend_activation_rechecks() {
+    let pending = schedule(Event::Foreground, 0, [None; 3]);
+    assert_eq!(schedule(Event::Other, 100, pending), pending);
+    assert_eq!(schedule(Event::Timer, 2000, pending), [None; 3]);
+  }
+
   fn window() -> Foreground {
     let monitor = Rect {
       left: -1920,
