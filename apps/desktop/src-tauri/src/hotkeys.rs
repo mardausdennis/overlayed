@@ -61,12 +61,67 @@ pub struct HotkeysState {
 
 #[derive(Default)]
 pub struct OverlayVisibility {
-  hidden: AtomicBool,
+  reasons: Mutex<VisibilityReasons>,
+}
+
+#[derive(Default)]
+struct VisibilityReasons {
+  hotkey_hidden: bool,
+  fullscreen_hidden: bool,
+  pending_paint: bool,
+  revision: u64,
+}
+
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VisibilityStatus {
+  hotkey_hidden: bool,
+  fullscreen_hidden: bool,
+  visible: bool,
+  revision: u64,
+}
+
+impl VisibilityReasons {
+  fn visible(&self) -> bool {
+    !self.hotkey_hidden && !self.fullscreen_hidden
+  }
+
+  fn status(&self) -> VisibilityStatus {
+    VisibilityStatus {
+      hotkey_hidden: self.hotkey_hidden,
+      fullscreen_hidden: self.fullscreen_hidden,
+      visible: self.visible(),
+      revision: self.revision,
+    }
+  }
+
+  fn change(&mut self, fullscreen: bool, hidden: bool) -> bool {
+    let reason = if fullscreen {
+      &mut self.fullscreen_hidden
+    } else {
+      &mut self.hotkey_hidden
+    };
+    if *reason == hidden {
+      return false;
+    }
+    *reason = hidden;
+    self.revision += 1;
+    self.pending_paint = self.visible();
+    true
+  }
+
+  fn accepts_paint(&self, revision: u64) -> bool {
+    self.revision == revision && self.visible()
+  }
 }
 
 impl OverlayVisibility {
   pub fn is_hidden(&self) -> bool {
-    self.hidden.load(Ordering::Acquire)
+    self
+      .reasons
+      .lock()
+      .map(|state| !state.visible() || state.pending_paint)
+      .unwrap_or(true)
   }
 }
 
@@ -341,8 +396,58 @@ fn ignore_cursor_events(visible: bool, pinned: bool) -> bool {
   !visible || pinned
 }
 
+// Called on the UI thread, including by the native fullscreen tracker. The
+// event is sent only after hiding is safe; showing waits for a paint receipt.
+fn change_visibility(
+  window: &WebviewWindow,
+  fullscreen: bool,
+  hidden: bool,
+) -> Result<VisibilityStatus, String> {
+  let state = window.app_handle().state::<OverlayVisibility>();
+  let mut reasons = state.reasons.lock().map_err(|error| error.to_string())?;
+  let previous = if fullscreen {
+    reasons.fullscreen_hidden
+  } else {
+    reasons.hotkey_hidden
+  };
+  if previous == hidden {
+    return Ok(reasons.status());
+  }
+  window
+    .set_ignore_cursor_events(true)
+    .map_err(|error| error.to_string())?;
+  reasons.change(fullscreen, hidden);
+  let status = reasons.status();
+  drop(reasons);
+  if let Err(error) = window.emit("overlay_visibility", status) {
+    log::warn!("Could not publish overlay visibility: {error}");
+  }
+  Ok(status)
+}
+
+pub fn set_fullscreen_hidden(
+  window: &WebviewWindow,
+  hidden: bool,
+) -> Result<VisibilityStatus, String> {
+  change_visibility(window, true, hidden)
+}
+
 #[tauri::command]
-pub async fn set_overlay_visible(app: AppHandle, visible: bool) -> Result<(), String> {
+pub fn get_overlay_visibility(
+  state: State<'_, OverlayVisibility>,
+) -> Result<VisibilityStatus, String> {
+  state
+    .reasons
+    .lock()
+    .map(|state| state.status())
+    .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+pub async fn set_overlay_visible(
+  app: AppHandle,
+  visible: bool,
+) -> Result<VisibilityStatus, String> {
   let (send, receive) = tokio::sync::oneshot::channel();
   let app_handle = app.clone();
   app
@@ -351,18 +456,47 @@ pub async fn set_overlay_visible(app: AppHandle, visible: bool) -> Result<(), St
         let window = app_handle
           .get_webview_window(MAIN_WINDOW_NAME)
           .ok_or_else(|| "The overlay window is unavailable".to_string())?;
-        let pinned = commands::get_pin(app_handle.state::<Pinned>());
-        window
-          .set_ignore_cursor_events(ignore_cursor_events(visible, pinned))
-          .map_err(|error| error.to_string())?;
-        app_handle
-          .state::<OverlayVisibility>()
-          .hidden
-          .store(!visible, Ordering::Release);
-        Ok(())
+        change_visibility(&window, false, !visible)
       })();
       if let Err(error) = &result {
         log::warn!("Could not change overlay visibility: {error}");
+      }
+      let _ = send.send(result);
+    })
+    .map_err(|error| error.to_string())?;
+  receive.await.map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+pub async fn acknowledge_overlay_visible(
+  app: AppHandle,
+  revision: u64,
+) -> Result<VisibilityStatus, String> {
+  let (send, receive) = tokio::sync::oneshot::channel();
+  let app_handle = app.clone();
+  app
+    .run_on_main_thread(move || {
+      let result = (|| {
+        let window = app_handle
+          .get_webview_window(MAIN_WINDOW_NAME)
+          .ok_or_else(|| "The overlay window is unavailable".to_string())?;
+        let visibility = app_handle.state::<OverlayVisibility>();
+        let mut state = visibility
+          .reasons
+          .lock()
+          .map_err(|error| error.to_string())?;
+        // A newer auto-hide transition invalidates an in-flight paint receipt.
+        if state.accepts_paint(revision) {
+          let pinned = commands::get_pin(app_handle.state::<Pinned>());
+          window
+            .set_ignore_cursor_events(ignore_cursor_events(true, pinned))
+            .map_err(|error| error.to_string())?;
+          state.pending_paint = false;
+        }
+        Ok(state.status())
+      })();
+      if let Err(error) = &result {
+        log::warn!("Could not restore overlay cursor handling: {error}");
       }
       let _ = send.send(result);
     })
@@ -757,5 +891,52 @@ mod tests {
     assert!(ignore_cursor_events(false, true));
     assert!(!ignore_cursor_events(true, false));
     assert!(ignore_cursor_events(true, true));
+  }
+
+  #[test]
+  fn hotkey_and_fullscreen_reasons_are_independent_and_only_transitions_advance() {
+    let mut state = VisibilityReasons::default();
+    assert!(state.visible());
+    assert!(!state.change(true, false));
+    assert_eq!(state.revision, 0);
+    assert!(state.change(true, true));
+    assert!(!state.visible());
+    assert!(state.change(false, true));
+    assert!(!state.change(false, true));
+    assert_eq!(state.revision, 2);
+    assert!(state.change(true, false));
+    assert!(
+      !state.visible(),
+      "Fullscreen leaving does not undo the hide hotkey"
+    );
+    assert!(state.change(false, false));
+    assert!(state.visible());
+    assert!(state.pending_paint);
+    assert!(state.change(true, true));
+    assert!(
+      !state.change(false, false),
+      "Tray show respects the active fullscreen reason"
+    );
+    assert!(!state.visible());
+    assert!(state.change(true, false));
+    assert!(
+      state.visible(),
+      "Leaving fullscreen restores the overlay by itself"
+    );
+  }
+
+  #[test]
+  fn stale_paint_receipts_cannot_restore_cursor_handling() {
+    let mut state = VisibilityReasons::default();
+    state.change(true, true);
+    state.change(true, false);
+    let revision = state.revision;
+    assert!(state.accepts_paint(revision));
+    state.change(true, true);
+    assert!(!state.accepts_paint(revision));
+    assert!(!state.accepts_paint(state.revision));
+    state.change(true, false);
+    assert!(!state.accepts_paint(revision));
+    assert!(state.accepts_paint(state.revision));
   }
 }
