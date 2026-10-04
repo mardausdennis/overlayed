@@ -12,6 +12,8 @@ import { TooltipProvider } from "./components/ui/tooltip";
 import * as Sentry from "@sentry/react";
 
 Sentry.init({
+  // Fork build: never report to the upstream project's Sentry.
+  enabled: false,
   dsn: "https://c44ea5eb3278afec8dde67f040b051c8@o4506462955503616.ingest.us.sentry.io/4507379579289600",
   integrations: [Sentry.browserTracingIntegration(), Sentry.replayIntegration()],
   // Performance Monitoring
