@@ -33,8 +33,8 @@ export const SettingsView = ({ update }: { update: Update | null }) => {
       >
         <TabsList className="grid w-full shrink-0 grid-cols-5 rounded-t-none [&>button]:text-xs">
           <TabsTrigger value="account">General</TabsTrigger>
-          <TabsTrigger value="configuration">Configuration</TabsTrigger>
           <TabsTrigger value="placement">Position</TabsTrigger>
+          <TabsTrigger value="configuration">Configuration</TabsTrigger>
           <TabsTrigger value="hotkeys">Hotkeys</TabsTrigger>
           <TabsTrigger value="join-history">Join History</TabsTrigger>
         </TabsList>
@@ -50,12 +50,12 @@ export const SettingsView = ({ update }: { update: Update | null }) => {
           <TabsContent tabIndex={-1} value="account">
             <Account />
           </TabsContent>
+          <TabsContent tabIndex={-1} value="placement">
+            <Placement />
+          </TabsContent>
           <TabsContent tabIndex={-1} value="configuration">
             <Configuration />
             <Appearance />
-          </TabsContent>
-          <TabsContent tabIndex={-1} value="placement">
-            <Placement />
           </TabsContent>
           <TabsContent tabIndex={-1} value="hotkeys">
             <Hotkeys />
