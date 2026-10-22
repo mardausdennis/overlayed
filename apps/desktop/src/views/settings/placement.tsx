@@ -1,4 +1,5 @@
 import { Slider } from "@/components/ui/slider";
+import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import Config, { type OverlayedConfig, type PlacementAnchor } from "@/config";
 import { useConfigValue } from "@/hooks/use-config-value";
@@ -116,6 +117,12 @@ export const Placement = () => {
               ? "right"
               : null;
           if (horizontal && config.horizontal !== horizontal) await Config.set("horizontal", horizontal);
+          const vertical = config.placementAnchor.startsWith("top-")
+            ? "top"
+            : config.placementAnchor.startsWith("bottom-")
+              ? "bottom"
+              : null;
+          if (vertical && config.vertical !== vertical) await Config.set("vertical", vertical);
         }
         await emit("config_update", await Config.getConfig());
         saved = true;
@@ -156,7 +163,7 @@ export const Placement = () => {
   const minY = monitors.length ? Math.min(...monitors.map(monitor => monitor.y)) : 0;
   const spanX = monitors.length ? Math.max(...monitors.map(monitor => monitor.x + monitor.width)) - minX : 1;
   const spanY = monitors.length ? Math.max(...monitors.map(monitor => monitor.y + monitor.height)) - minY : 1;
-  const canvasHeight = response?.positioningSupported === false || fixed ? 92 : 132;
+  const canvasHeight = 92;
   const mapScale = Math.min(524 / spanX, canvasHeight / spanY);
   const mapWidth = spanX * mapScale;
   const mapHeight = spanY * mapScale;
@@ -175,168 +182,188 @@ export const Placement = () => {
   return (
     <div className="flex flex-col gap-2 text-sm">
       <div className="flex h-8 items-center justify-between mx-2">
-        <label htmlFor="fixed-position" className="font-medium">
-          Fixed position
-        </label>
-        <Switch
-          id="fixed-position"
-          checked={fixed}
-          disabled={!response?.positioningSupported}
-          onCheckedChange={checked => update("placementMode", checked ? "anchored" : "manual")}
-        />
+        <span className="font-medium">Position mode</span>
+        <div className="inline-flex rounded-md border border-zinc-700" role="group" aria-label="Position mode">
+          <Button
+            type="button"
+            size="sm"
+            variant={fixed ? "default" : "ghost"}
+            className="h-7 rounded-r-none"
+            aria-pressed={fixed}
+            disabled={!response?.positioningSupported}
+            onClick={() => update("placementMode", "anchored")}
+          >
+            Fixed
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            variant={!fixed ? "default" : "ghost"}
+            className="h-7 rounded-l-none"
+            aria-pressed={!fixed}
+            onClick={() => update("placementMode", "manual")}
+          >
+            Free (drag the window)
+          </Button>
+        </div>
       </div>
-      {fixed && (
-        <p className="text-xs text-zinc-400 mx-2">
-          Fixed overlays are click-through. To change settings, start Overlayed again or use its tray icon (Settings or
-          Unpin).
-        </p>
-      )}
+      <p className="text-xs text-zinc-400 mx-2">
+        {fixed
+          ? "Pinned at the spot you pick below and click-through. To change settings, start Overlayed again or use the tray icon (Settings or Unpin)."
+          : "Drag and resize the overlay yourself."}
+      </p>
       {response?.positioningSupported === false ? (
         <p className="text-xs text-zinc-400 mx-2">
           Your desktop doesn't let apps place their own windows (Wayland). Drag the overlay instead.
         </p>
       ) : null}
-      <div className={cn("rounded-md border border-zinc-700 bg-zinc-950 p-2", !enabled && "opacity-40")}>
-        <div className="flex items-center justify-center" style={{ height: canvasHeight }}>
-          <div className="relative" style={{ width: mapWidth, height: mapHeight }}>
-            {monitors.map((monitor, index) => {
-              const isSelected = monitor === selected;
-              return (
-                <div
-                  key={`${monitor.name}-${monitor.x}-${monitor.y}`}
-                  className={cn(
-                    "absolute rounded-sm border bg-zinc-800",
-                    isSelected ? "border-blue-400" : "border-zinc-600"
-                  )}
-                  style={{
-                    left: (monitor.x - minX) * mapScale,
-                    top: (monitor.y - minY) * mapScale,
-                    width: monitor.width * mapScale,
-                    height: monitor.height * mapScale,
+      {fixed && (
+        <>
+          <div className={cn("rounded-md border border-zinc-700 bg-zinc-950 p-2", !enabled && "opacity-40")}>
+            <div className="flex items-center justify-center" style={{ height: canvasHeight }}>
+              <div className="relative" style={{ width: mapWidth, height: mapHeight }}>
+                {monitors.map((monitor, index) => {
+                  const isSelected = monitor === selected;
+                  return (
+                    <div
+                      key={`${monitor.name}-${monitor.x}-${monitor.y}`}
+                      className={cn(
+                        "absolute rounded-sm border bg-zinc-800",
+                        isSelected ? "border-blue-400" : "border-zinc-600"
+                      )}
+                      style={{
+                        left: (monitor.x - minX) * mapScale,
+                        top: (monitor.y - minY) * mapScale,
+                        width: monitor.width * mapScale,
+                        height: monitor.height * mapScale,
+                      }}
+                    >
+                      <button
+                        type="button"
+                        disabled={!enabled}
+                        aria-pressed={isSelected}
+                        aria-label={`Display ${index + 1}${monitor.primary ? ", primary" : ""}`}
+                        title={monitor.name || `Display ${index + 1}`}
+                        className="absolute inset-0 cursor-pointer rounded-sm focus-visible:outline-2 focus-visible:outline-blue-400 disabled:cursor-default"
+                        onClick={() => update("placementMonitor", monitor.name || null)}
+                      >
+                        <span className="absolute left-1 top-0 text-xs text-zinc-300">
+                          {index + 1}
+                          {monitor.primary ? "*" : ""}
+                        </span>
+                      </button>
+                      {isSelected && (
+                        <>
+                          <div
+                            aria-hidden="true"
+                            className="pointer-events-none absolute rounded-xs border border-blue-300 bg-blue-400/40"
+                            style={overlayPreview(monitor)}
+                          />
+                          <div className="pointer-events-none absolute inset-[10%] grid grid-cols-3 grid-rows-3">
+                            {anchors.map((anchor, index) => (
+                              <button
+                                key={anchor}
+                                type="button"
+                                disabled={!enabled}
+                                aria-label={`Anchor ${anchor.replace(/-/g, " ")}`}
+                                aria-pressed={placementAnchor === anchor}
+                                title={anchor.replace(/-/g, " ")}
+                                className="pointer-events-auto flex min-h-0 min-w-0 cursor-pointer items-center justify-center rounded-sm focus-visible:outline-2 focus-visible:outline-blue-400 disabled:cursor-default"
+                                style={{
+                                  justifySelf: ["start", "center", "end"][index % 3],
+                                  alignSelf: ["start", "center", "end"][Math.floor(index / 3)],
+                                }}
+                                onClick={() => update("placementAnchor", anchor)}
+                              >
+                                <span
+                                  className={cn(
+                                    "block h-2.5 w-2.5 rounded-full border border-zinc-950",
+                                    placementAnchor === anchor ? "bg-blue-400" : "bg-zinc-400 hover:bg-white"
+                                  )}
+                                />
+                              </button>
+                            ))}
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+          <p className="min-h-4 text-xs text-zinc-400 mx-2" aria-live="polite">
+            {error ??
+              (missing
+                ? "Saved display isn't connected. The primary display is used."
+                : selected
+                  ? `Display ${monitors.indexOf(selected) + 1} - ${selected.width}x${selected.height}${selected.primary ? " - primary" : ""}`
+                  : response
+                    ? "No displays found."
+                    : "Loading displays...")}
+          </p>
+          {[
+            {
+              label: "Horizontal margin",
+              key: "placementOffsetX" as const,
+              value: offsets.placementOffsetX,
+              centered: horizontal === 1,
+            },
+            {
+              label: "Vertical margin",
+              key: "placementOffsetY" as const,
+              value: offsets.placementOffsetY,
+              centered: vertical === 1,
+            },
+          ].map(({ label, key, value, centered }) => (
+            <div
+              key={key}
+              className={cn("flex h-8 items-center justify-between mx-2", (!enabled || centered) && "opacity-40")}
+            >
+              <label htmlFor={key} className="font-medium">
+                {label}
+              </label>
+              <div className="flex w-1/2 items-center gap-4">
+                <Slider
+                  id={key}
+                  aria-label={label}
+                  value={[value]}
+                  min={0}
+                  max={200}
+                  step={1}
+                  disabled={!enabled || centered}
+                  onPointerDownCapture={() => {
+                    dragging.current = key;
                   }}
-                >
-                  <button
-                    type="button"
-                    disabled={!enabled}
-                    aria-pressed={isSelected}
-                    aria-label={`Display ${index + 1}${monitor.primary ? ", primary" : ""}`}
-                    title={monitor.name || `Display ${index + 1}`}
-                    className="absolute inset-0 cursor-pointer rounded-sm focus-visible:outline-2 focus-visible:outline-blue-400 disabled:cursor-default"
-                    onClick={() => update("placementMonitor", monitor.name || null)}
-                  >
-                    <span className="absolute left-1 top-0 text-xs text-zinc-300">
-                      {index + 1}
-                      {monitor.primary ? "*" : ""}
-                    </span>
-                  </button>
-                  {isSelected && (
-                    <>
-                      <div
-                        aria-hidden="true"
-                        className="pointer-events-none absolute rounded-xs border border-blue-300 bg-blue-400/40"
-                        style={overlayPreview(monitor)}
-                      />
-                      <div className="pointer-events-none absolute inset-[10%] grid grid-cols-3 grid-rows-3">
-                        {anchors.map((anchor, index) => (
-                          <button
-                            key={anchor}
-                            type="button"
-                            disabled={!enabled}
-                            aria-label={`Anchor ${anchor.replace(/-/g, " ")}`}
-                            aria-pressed={placementAnchor === anchor}
-                            title={anchor.replace(/-/g, " ")}
-                            className="pointer-events-auto flex min-h-0 min-w-0 cursor-pointer items-center justify-center rounded-sm focus-visible:outline-2 focus-visible:outline-blue-400 disabled:cursor-default"
-                            style={{
-                              justifySelf: ["start", "center", "end"][index % 3],
-                              alignSelf: ["start", "center", "end"][Math.floor(index / 3)],
-                            }}
-                            onClick={() => update("placementAnchor", anchor)}
-                          >
-                            <span
-                              className={cn(
-                                "block h-2.5 w-2.5 rounded-full border border-zinc-950",
-                                placementAnchor === anchor ? "bg-blue-400" : "bg-zinc-400 hover:bg-white"
-                              )}
-                            />
-                          </button>
-                        ))}
-                      </div>
-                    </>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      </div>
-      <p className="min-h-4 text-xs text-zinc-400 mx-2" aria-live="polite">
-        {error ??
-          (missing
-            ? "Saved display isn't connected. The primary display is used."
-            : selected
-              ? `Display ${monitors.indexOf(selected) + 1} - ${selected.width}x${selected.height}${selected.primary ? " - primary" : ""}`
-              : response
-                ? "No displays found."
-                : "Loading displays...")}
-      </p>
-      {[
-        {
-          label: "Horizontal margin",
-          key: "placementOffsetX" as const,
-          value: offsets.placementOffsetX,
-          centered: horizontal === 1,
-        },
-        {
-          label: "Vertical margin",
-          key: "placementOffsetY" as const,
-          value: offsets.placementOffsetY,
-          centered: vertical === 1,
-        },
-      ].map(({ label, key, value, centered }) => (
-        <div
-          key={key}
-          className={cn("flex h-8 items-center justify-between mx-2", (!enabled || centered) && "opacity-40")}
-        >
-          <label htmlFor={key} className="font-medium">
-            {label}
+                  onPointerUp={() => {
+                    dragging.current = null;
+                  }}
+                  onPointerCancel={() => {
+                    dragging.current = null;
+                    previewOffset(key, awaitingCommit.current[key] ?? savedOffsets.current[key]);
+                  }}
+                  onValueChange={values => previewOffset(key, values[0] ?? value)}
+                  onValueCommit={values => commitOffset(key, values[0] ?? value)}
+                />
+                <span className="w-14 shrink-0 text-right">{value} px</span>
+              </div>
+            </div>
+          ))}
+        </>
+      )}
+      {!fixed && error && (
+        <p className="text-xs text-red-400 mx-2" role="alert">
+          {error}
+        </p>
+      )}
+      {!fixed && (
+        <div className="flex h-8 items-center justify-between mx-2">
+          <label htmlFor="start-pinned" className="font-medium">
+            Start pinned
           </label>
-          <div className="flex w-1/2 items-center gap-4">
-            <Slider
-              id={key}
-              aria-label={label}
-              value={[value]}
-              min={0}
-              max={200}
-              step={1}
-              disabled={!enabled || centered}
-              onPointerDownCapture={() => {
-                dragging.current = key;
-              }}
-              onPointerUp={() => {
-                dragging.current = null;
-              }}
-              onPointerCancel={() => {
-                dragging.current = null;
-                previewOffset(key, awaitingCommit.current[key] ?? savedOffsets.current[key]);
-              }}
-              onValueChange={values => previewOffset(key, values[0] ?? value)}
-              onValueCommit={values => commitOffset(key, values[0] ?? value)}
-            />
-            <span className="w-14 shrink-0 text-right">{value} px</span>
-          </div>
+          <Switch id="start-pinned" checked={startPinned} onCheckedChange={checked => update("startPinned", checked)} />
         </div>
-      ))}
-      <div className="flex h-8 items-center justify-between mx-2">
-        <label htmlFor="start-pinned" className="font-medium">
-          Start pinned
-        </label>
-        <Switch
-          id="start-pinned"
-          checked={startPinned}
-          disabled={fixed}
-          onCheckedChange={checked => update("startPinned", checked)}
-        />
-      </div>
+      )}
     </div>
   );
 };
