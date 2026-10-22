@@ -4,7 +4,7 @@ import type { OverlayedUser } from "../types";
 import { HeadphonesOff } from "./icons/headphones-off";
 import { MicOff } from "./icons/mic-off";
 import { cn } from "@/utils/tw";
-import { type CSSProperties, useLayoutEffect, useRef, useState } from "react";
+import { useLayoutEffect, useRef, useState } from "react";
 
 export const User = ({
   item,
@@ -27,7 +27,7 @@ export const User = ({
 
   const talkingClass = talking ? "border-green-500" : "border-zinc-800";
   const opacityStyle = talking ? "100%" : `${opacity}%`;
-  const pill = alignDirection !== "center";
+  const showName = alignDirection !== "center";
   const pillBackground = `rgba(0, 0, 0, ${0.55 * (opacityTarget === "username-box" ? opacity / 100 : 1)})`;
   const scaleFactor = (userScale ?? 100) / 100;
   const rowRef = useRef<HTMLDivElement>(null);
@@ -107,16 +107,19 @@ export const User = ({
         alignDirection == "right" ? "flex-row-reverse" : "flex-row",
         anchored ? "w-max shrink-0" : undefined,
         anchored && alignDirection === "center" ? "pb-2" : undefined,
-        pill && "rounded-full px-1.5 py-1",
-        pill && !anchored && "w-fit max-w-full md:bg-(--row-background)",
-        pill && !anchored && alignDirection === "right" && "ml-auto"
+        showName && "px-1.5 py-1",
+        showName && !anchored && "w-fit max-w-full",
+        showName && !anchored && alignDirection === "right" && "ml-auto"
       )}
       style={{
-        ...(pill ? ({ "--row-background": pillBackground } as CSSProperties) : {}),
-        ...(pill && anchored ? { backgroundColor: pillBackground } : {}),
         ...(opacityTarget === "all" ? { opacity: opacityStyle } : {}),
         transform: scaleFactor !== 1 ? `scale(${scaleFactor})` : undefined,
-        transformOrigin: scaleFactor !== 1 ? (anchored ? "top left" : transformOrigin) : undefined,
+        transformOrigin:
+          scaleFactor !== 1
+            ? anchored
+              ? `top ${alignDirection === "right" ? "right" : "left"}`
+              : transformOrigin
+            : undefined,
         willChange: scaleFactor !== 1 ? "transform" : undefined,
       }}
     >
@@ -141,11 +144,12 @@ export const User = ({
       <div
         className={cn(
           anchored
-            ? "flex shrink-0 pointer-events-none items-center rounded-md p-1 pl-2 pr-2"
-            : "min-w-0 md:flex hidden pointer-events-none items-center rounded-md p-1 pl-2 pr-2",
+            ? "flex shrink-0 pointer-events-none items-center rounded-full p-1 pl-2 pr-2"
+            : "min-w-0 md:flex hidden pointer-events-none items-center rounded-full p-1 pl-2 pr-2",
           alignDirection === "center" ? "hidden md:hidden" : undefined,
           "text-white font-semibold"
         )}
+        style={{ backgroundColor: pillBackground }}
       >
         <span className="truncate text-ellipsis">{displayName}</span>
         <div className="flex shrink-0">
@@ -159,7 +163,7 @@ export const User = ({
   if (!anchored) return row;
   return (
     <div
-      className="shrink-0 overflow-hidden"
+      className={cn("shrink-0 overflow-hidden", alignDirection === "right" && "flex items-start justify-end")}
       style={
         naturalSize ? { width: naturalSize.width * scaleFactor, height: naturalSize.height * scaleFactor } : undefined
       }
